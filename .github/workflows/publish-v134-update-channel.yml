@@ -1,0 +1,74 @@
+name: Publish Tahalil V134 Update Channel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download signed V134 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='Tahalil-Alakkad-V134-Safety-Android-SIGNED.apk'
+          URL='https://github.com/ahmedmeshrf22-jpg/lab-tests-directory/releases/download/v134/Tahalil-Alakkad-V134-Safety-Android-SIGNED.apk'
+          curl --fail --location --retry 3 --retry-delay 2 "$URL" -o "$APK"
+          test -s "$APK"
+
+      - name: Create verified latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='Tahalil-Alakkad-V134-Safety-Android-SIGNED.apk'
+          SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          cat > latest.json <<EOF
+          {
+            "versionCode": 134,
+            "versionName": "5.54-safety-backup-v134",
+            "apkUrl": "https://github.com/ahmedmeshrf22-jpg/tahalil-alakkad-updates/releases/download/v134/${APK}",
+            "sha256": "${SHA}",
+            "mandatory": true
+          }
+          EOF
+          python3 -m json.tool latest.json >/dev/null
+          echo "APK SHA256: $SHA"
+          cat latest.json
+
+      - name: Publish or refresh V134 update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='Tahalil-Alakkad-V134-Safety-Android-SIGNED.apk'
+          if gh release view v134 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v134 "$APK" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit v134 --title 'تحاليل العقاد V134 Safety' --notes 'Automatic mandatory update channel for signed V134 Safety.' --latest --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create v134 "$APK" latest.json \
+              --title 'تحاليل العقاد V134 Safety' \
+              --notes 'Automatic mandatory update channel for signed V134 Safety.' \
+              --latest \
+              --repo "$GITHUB_REPOSITORY"
+          fi
+
+      - name: Verify published manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+          curl --fail --location --retry 3 \
+            'https://github.com/ahmedmeshrf22-jpg/tahalil-alakkad-updates/releases/latest/download/latest.json' \
+            -o published-latest.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open('published-latest.json'))
+          assert p['versionCode']==134, p
+          assert p['mandatory'] is True, p
+          assert p['sha256'] and len(p['sha256'])==64, p
+          print('OK: update channel points to V134')
+          PY
