@@ -1,0 +1,75 @@
+name: Finalize V137 Update Channel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download V137 APK from this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded
+          gh release download v137 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.apk' \
+            --dir downloaded
+          APK="$(find downloaded -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -n "$APK" && test -s "$APK"
+          cp "$APK" Tahalil-Alakkad-LATEST.apk
+
+      - name: Create latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(sha256sum Tahalil-Alakkad-LATEST.apk | awk '{print $1}')"
+          cat > latest.json <<EOF
+          {
+            "versionCode": 137,
+            "versionName": "5.57-auto-backup-v137",
+            "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v137/Tahalil-Alakkad-LATEST.apk",
+            "sha256": "${SHA}",
+            "mandatory": true
+          }
+          EOF
+          python3 -m json.tool latest.json >/dev/null
+          echo "SHA256=$SHA"
+
+      - name: Publish V137 update files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload v137 Tahalil-Alakkad-LATEST.apk latest.json \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+          gh release edit v137 \
+            --latest \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify public update channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
+            -o check.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open("check.json", encoding="utf-8"))
+          assert p["versionCode"] == 137, p
+          assert p["versionName"] == "5.57-auto-backup-v137", p
+          assert p["mandatory"] is True, p
+          assert len(p["sha256"]) == 64, p
+          assert p["apkUrl"].endswith("/Tahalil-Alakkad-LATEST.apk"), p
+          print("OK: V137 update channel is live")
+          PY
