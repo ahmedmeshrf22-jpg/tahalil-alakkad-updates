@@ -1,0 +1,69 @@
+name: Finalize V134 Update Channel FIX3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download uploaded V134 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/v134/default.apk" \
+            -o default.apk
+          test -s default.apk
+          cp default.apk Tahalil-Alakkad-LATEST.apk
+
+      - name: Create latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(sha256sum Tahalil-Alakkad-LATEST.apk | awk '{print $1}')"
+          cat > latest.json <<EOF
+          {
+            "versionCode": 134,
+            "versionName": "5.54-safety-backup-v134",
+            "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v134/Tahalil-Alakkad-LATEST.apk",
+            "sha256": "${SHA}",
+            "mandatory": true
+          }
+          EOF
+          python3 -m json.tool latest.json >/dev/null
+          echo "SHA256=$SHA"
+
+      - name: Publish update files to V134
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload v134 Tahalil-Alakkad-LATEST.apk latest.json \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+          gh release edit v134 \
+            --latest \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify public update channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
+            -o check.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open("check.json", encoding="utf-8"))
+          assert p["versionCode"] == 134, p
+          assert p["mandatory"] is True, p
+          assert len(p["sha256"]) == 64, p
+          assert p["apkUrl"].endswith("/Tahalil-Alakkad-LATEST.apk"), p
+          print("OK: V134 update channel is live")
+          PY
