@@ -1,0 +1,88 @@
+name: Finalize V139 Update Channel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download uploaded V139 APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p incoming
+          mapfile -t APKS < <(
+            gh release view v139 \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[].name | select(endswith(".apk")) | select(. != "Tahalil-Alakkad-LATEST.apk")'
+          )
+          if [ "${#APKS[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one uploaded source APK in v139; found ${#APKS[@]}."
+            printf '%s\n' "${APKS[@]:-}"
+            exit 1
+          fi
+          gh release download v139 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${APKS[0]}" \
+            --dir incoming
+          cp "incoming/${APKS[0]}" Tahalil-Alakkad-LATEST.apk
+          test -s Tahalil-Alakkad-LATEST.apk
+
+      - name: Create latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(sha256sum Tahalil-Alakkad-LATEST.apk | awk '{print $1}')"
+          cat > latest.json <<EOF
+          {
+            "versionCode": 139,
+            "versionName": "5.59-final-resilience-v139",
+            "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v139/Tahalil-Alakkad-LATEST.apk",
+            "sha256": "${SHA}",
+            "mandatory": true
+          }
+          EOF
+          python3 -m json.tool latest.json >/dev/null
+          echo "SHA256=$SHA"
+
+      - name: Publish V139 update files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload v139 Tahalil-Alakkad-LATEST.apk latest.json \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+
+          gh release edit v139 \
+            --title "Tahalil Alakkad V139" \
+            --notes "Automatic mandatory update channel for signed V139 Final Resilience." \
+            --latest \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify public update channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
+            -o check.json
+
+          python3 - <<'PY'
+          import json
+          p = json.load(open("check.json", encoding="utf-8"))
+          assert p["versionCode"] == 139, p
+          assert p["mandatory"] is True, p
+          assert len(p["sha256"]) == 64, p
+          assert p["apkUrl"].endswith("/Tahalil-Alakkad-LATEST.apk"), p
+          print("OK: V139 update channel is live")
+          PY
