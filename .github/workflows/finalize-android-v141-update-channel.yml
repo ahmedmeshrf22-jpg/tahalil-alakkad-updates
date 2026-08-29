@@ -1,0 +1,92 @@
+name: Finalize Android V141 Update Channel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified Android V141
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC='https://github.com/ahmedmeshrf22-jpg/lab-tests-directory/releases/download/v141-android/Tahalil-Alakkad-V141-Final-Delivery-Android-SIGNED.apk'
+          curl --fail --location --retry 3 --retry-delay 2 "$SRC" -o Tahalil-Alakkad-LATEST.apk
+          test -s Tahalil-Alakkad-LATEST.apk
+
+          SHA="$(sha256sum Tahalil-Alakkad-LATEST.apk | awk '{print $1}')"
+          test "$SHA" = "2988664213162da79cb4cfeb7b49b786401f1b567f484808beeb88548e1891b2" || {
+            echo "::error::Android V141 SHA256 mismatch"
+            exit 1
+          }
+          echo "ANDROID_SHA=$SHA" >> "$GITHUB_ENV"
+
+      - name: Create Android V141 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > latest.json <<EOF
+          {
+            "versionCode": 141,
+            "versionName": "5.61-final-delivery-v141",
+            "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v140/Tahalil-Alakkad-LATEST.apk",
+            "sha256": "${ANDROID_SHA}",
+            "mandatory": true
+          }
+          EOF
+          python3 -m json.tool latest.json >/dev/null
+
+      - name: Publish Android V141 without touching Windows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view v140 --repo "$GITHUB_REPOSITORY" >/dev/null
+
+          gh release upload v140 \
+            Tahalil-Alakkad-LATEST.apk \
+            latest.json \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+
+          gh release edit v140 \
+            --title "Tahalil Alakkad Update Channel" \
+            --notes "Android V141 Final Delivery + Windows V142 update channel." \
+            --latest \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify Android V141 and preserve Windows V142
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
+            -o check-android.json
+
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-windows.json" \
+            -o check-windows.json
+
+          python3 - <<'PY'
+          import json
+          a=json.load(open("check-android.json",encoding="utf-8"))
+          w=json.load(open("check-windows.json",encoding="utf-8"))
+
+          assert a["versionCode"] == 141, a
+          assert a["versionName"] == "5.61-final-delivery-v141", a
+          assert a["mandatory"] is True, a
+          assert a["sha256"] == "2988664213162da79cb4cfeb7b49b786401f1b567f484808beeb88548e1891b2", a
+          assert a["apkUrl"].endswith("/v140/Tahalil-Alakkad-LATEST.apk"), a
+
+          assert w["versionCode"] == 142, w
+          assert w["mandatory"] is True, w
+
+          print("OK: Android V141 LIVE; Windows V142 preserved")
+          PY
