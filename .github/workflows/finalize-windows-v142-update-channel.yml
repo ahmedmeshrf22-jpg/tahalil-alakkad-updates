@@ -1,0 +1,102 @@
+name: Finalize Windows V142 Update Channel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find uploaded Windows V142 Setup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t ASSETS < <(
+            gh release view v140 \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[].name'
+          )
+
+          WINDOWS="$(printf '%s\n' "${ASSETS[@]}" \
+            | grep -E '^Tahalil-Alakkad-V142-Windows-Setup.*\.exe$' \
+            | grep -v 'LATEST' \
+            | head -1 || true)"
+
+          test -n "$WINDOWS" || {
+            echo "::error::Windows V142 Setup asset not found in public v140 release"
+            printf '%s\n' "${ASSETS[@]}"
+            exit 1
+          }
+
+          mkdir -p incoming
+          gh release download v140 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$WINDOWS" \
+            --dir incoming
+
+          test -s "incoming/$WINDOWS"
+          cp "incoming/$WINDOWS" Tahalil-Alakkad-Windows-LATEST-Setup.exe
+
+      - name: Create Windows V142 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          WIN_SHA="$(sha256sum Tahalil-Alakkad-Windows-LATEST-Setup.exe | awk '{print $1}')"
+
+          cat > latest-windows.json <<EOF
+          {
+            "versionCode": 142,
+            "versionName": "Windows V142 Metadata Fix",
+            "setupUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v140/Tahalil-Alakkad-Windows-LATEST-Setup.exe",
+            "sha256": "${WIN_SHA}",
+            "mandatory": true
+          }
+          EOF
+
+          python3 -m json.tool latest-windows.json >/dev/null
+          test "${#WIN_SHA}" -eq 64
+          echo "Windows SHA256=$WIN_SHA"
+
+      - name: Publish Windows V142 channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload v140 \
+            Tahalil-Alakkad-Windows-LATEST-Setup.exe \
+            latest-windows.json \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+
+          gh release edit v140 \
+            --title "Tahalil Alakkad V140 Update Channel" \
+            --notes "Android V140 update channel + Windows V142 metadata-fix update channel." \
+            --latest \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify Windows V142 public channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-windows.json" \
+            -o check-windows.json
+
+          python3 - <<'PY'
+          import json
+          w=json.load(open('check-windows.json',encoding='utf-8'))
+          assert w['versionCode']==142, w
+          assert w['versionName']=='Windows V142 Metadata Fix', w
+          assert w['mandatory'] is True, w
+          assert len(w['sha256'])==64, w
+          assert w['setupUrl'].endswith('/v140/Tahalil-Alakkad-Windows-LATEST-Setup.exe'), w
+          print('OK: Windows V142 update channel is live; Android channel unchanged')
+          PY
