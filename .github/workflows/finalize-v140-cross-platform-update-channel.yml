@@ -1,0 +1,114 @@
+name: Finalize V140 Android + Windows Update Channel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download uploaded Android V140 and Windows V141 installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p incoming
+
+          ANDROID='Tahalil-Alakkad-V140-Screenshot-Enabled-Android-SIGNED.apk'
+          WINDOWS='Tahalil-Alakkad-V141-Windows-Setup.exe'
+
+          gh release view v140 --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release download v140 --repo "$GITHUB_REPOSITORY" --pattern "$ANDROID" --dir incoming
+          gh release download v140 --repo "$GITHUB_REPOSITORY" --pattern "$WINDOWS" --dir incoming
+
+          test -s "incoming/$ANDROID"
+          test -s "incoming/$WINDOWS"
+
+          cp "incoming/$ANDROID" Tahalil-Alakkad-LATEST.apk
+          cp "incoming/$WINDOWS" Tahalil-Alakkad-Windows-LATEST-Setup.exe
+
+      - name: Create Android and Windows manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK_SHA="$(sha256sum Tahalil-Alakkad-LATEST.apk | awk '{print $1}')"
+          WIN_SHA="$(sha256sum Tahalil-Alakkad-Windows-LATEST-Setup.exe | awk '{print $1}')"
+
+          cat > latest.json <<EOF
+          {
+            "versionCode": 140,
+            "versionName": "5.60-screenshot-enabled-v140",
+            "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v140/Tahalil-Alakkad-LATEST.apk",
+            "sha256": "${APK_SHA}",
+            "mandatory": true
+          }
+          EOF
+
+          cat > latest-windows.json <<EOF
+          {
+            "versionCode": 141,
+            "versionName": "Windows V141 Auto Update",
+            "setupUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v140/Tahalil-Alakkad-Windows-LATEST-Setup.exe",
+            "sha256": "${WIN_SHA}",
+            "mandatory": true
+          }
+          EOF
+
+          python3 -m json.tool latest.json >/dev/null
+          python3 -m json.tool latest-windows.json >/dev/null
+          test "${#APK_SHA}" -eq 64
+          test "${#WIN_SHA}" -eq 64
+          echo "Android SHA256=$APK_SHA"
+          echo "Windows SHA256=$WIN_SHA"
+
+      - name: Publish combined update channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload v140 \
+            Tahalil-Alakkad-LATEST.apk \
+            latest.json \
+            Tahalil-Alakkad-Windows-LATEST-Setup.exe \
+            latest-windows.json \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+
+          gh release edit v140 \
+            --title "Tahalil Alakkad V140 Update Channel" \
+            --notes "Android V140 mandatory update channel + Windows V141 verified auto-update bootstrap/channel." \
+            --latest \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify Android and Windows public channels
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
+            -o check-android.json
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-windows.json" \
+            -o check-windows.json
+
+          python3 - <<'PY'
+          import json
+          a=json.load(open('check-android.json',encoding='utf-8'))
+          w=json.load(open('check-windows.json',encoding='utf-8'))
+          assert a['versionCode']==140, a
+          assert a['versionName']=='5.60-screenshot-enabled-v140', a
+          assert a['mandatory'] is True, a
+          assert len(a['sha256'])==64, a
+          assert a['apkUrl'].endswith('/v140/Tahalil-Alakkad-LATEST.apk'), a
+          assert w['versionCode']==141, w
+          assert w['mandatory'] is True, w
+          assert len(w['sha256'])==64, w
+          assert w['setupUrl'].endswith('/v140/Tahalil-Alakkad-Windows-LATEST-Setup.exe'), w
+          print('OK: Android V140 + Windows V141 update channels are live')
+          PY
