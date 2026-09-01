@@ -1,0 +1,117 @@
+name: Finalize Android V143 Update Channel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize-android-v143:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Download verified Android V143 release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC_BASE='https://github.com/ahmedmeshrf22-jpg/lab-tests-directory/releases/download/v143-android'
+          SRC_APK='Tahalil-Alakkad-V143-Organ-Search-Everywhere-SIGNED.apk'
+
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "$SRC_BASE/$SRC_APK" \
+            -o Tahalil-Alakkad-LATEST.apk
+
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "$SRC_BASE/$SRC_APK.sha256" \
+            -o source-v143.sha256
+
+          test -s Tahalil-Alakkad-LATEST.apk
+          test -s source-v143.sha256
+
+          ACTUAL_SHA="$(sha256sum Tahalil-Alakkad-LATEST.apk | awk '{print $1}')"
+          EXPECTED_SHA="$(awk '{print $1}' source-v143.sha256 | head -1 | tr '[:upper:]' '[:lower:]')"
+
+          test "${#ACTUAL_SHA}" -eq 64
+          test "${#EXPECTED_SHA}" -eq 64
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA" || {
+            echo "::error::V143 APK SHA256 mismatch"
+            exit 1
+          }
+
+          echo "ANDROID_SHA=$ACTUAL_SHA" >> "$GITHUB_ENV"
+          echo "Verified Android V143 SHA256=$ACTUAL_SHA"
+
+      - name: Create Android V143 latest manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > latest.json <<EOF
+          {
+            "versionCode": 143,
+            "versionName": "5.63-organ-search-everywhere-v143",
+            "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v140/Tahalil-Alakkad-LATEST.apk",
+            "sha256": "${ANDROID_SHA}",
+            "mandatory": true
+          }
+          EOF
+
+          python3 -m json.tool latest.json >/dev/null
+
+      - name: Publish V143 as latest Android update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release view v140 --repo "$GITHUB_REPOSITORY" >/dev/null
+
+          gh release upload v140 \
+            Tahalil-Alakkad-LATEST.apk \
+            latest.json \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+
+          gh release edit v140 \
+            --title "Tahalil Alakkad Android Update Channel" \
+            --notes "Android V143 mandatory update channel. Existing non-Android assets are preserved." \
+            --latest \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify live Android V143 channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
+            -o live-latest.json
+
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/v140/Tahalil-Alakkad-LATEST.apk" \
+            -o live-latest.apk
+
+          python3 - <<'PY'
+          import hashlib, json, os
+
+          m = json.load(open("live-latest.json", encoding="utf-8"))
+          assert m["versionCode"] == 143, m
+          assert m["versionName"] == "5.63-organ-search-everywhere-v143", m
+          assert m["mandatory"] is True, m
+          assert m["apkUrl"].endswith("/v140/Tahalil-Alakkad-LATEST.apk"), m
+          assert len(m["sha256"]) == 64, m
+
+          h = hashlib.sha256(open("live-latest.apk", "rb").read()).hexdigest()
+          assert h == m["sha256"], (h, m["sha256"])
+          assert h == os.environ["ANDROID_SHA"], (h, os.environ["ANDROID_SHA"])
+
+          print("ANDROID V143 LIVE UPDATE CHANNEL VERIFIED")
+          PY
+
+      - name: Final status
+        run: echo "Android V143 is now the mandatory latest Android update."
